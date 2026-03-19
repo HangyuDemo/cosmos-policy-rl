@@ -1,0 +1,24 @@
+# 忽略 docker
+docker/
+Dockerfile
+
+# 忽略测试文件
+test.py
+test2.py
+test3.py
+run
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 训练相关（建议）
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+outputs/
+
+# 系统文件
+.DS_Store
