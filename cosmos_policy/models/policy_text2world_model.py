@@ -38,7 +38,10 @@ from cosmos_policy._src.predict2.models.text2world_model import (
 from cosmos_policy._src.predict2.models.text2world_model import (
     Text2WorldModelConfig as BaseText2WorldModelConfig,
 )
-from cosmos_policy._src.predict2.networks.minimal_v4_dit import replace_selfattn_op_with_sparse_attn_op
+from cosmos_policy._src.predict2.networks.minimal_v4_dit import (
+    replace_selfattn_op_with_dense_temporal_causal_attn,
+    replace_selfattn_op_with_sparse_attn_op,
+)
 from cosmos_policy.conditioner import Text2WorldCondition
 from cosmos_policy.modules.cosmos_sampler import CosmosPolicySampler
 from cosmos_policy.modules.hybrid_edm_sde import HybridEDMSDE
@@ -311,11 +314,13 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
         compute_capability = major * 10 + minor
         if compute_capability not in ALLOWED_COMPUTE_CAPS:
             log.warning(
-                "Skipping hierarchical time-causal self-attention replacement because the current GPU "
+                "Falling back to dense temporal-causal self-attention because the current GPU "
                 f"compute capability ({compute_capability}) is not supported by NATTEN. "
-                f"Supported capabilities: {ALLOWED_COMPUTE_CAPS}."
+                f"Supported NATTEN capabilities: {ALLOWED_COMPUTE_CAPS}."
             )
-            self.config.enable_hierarchical_time_causal_self_attention = False
+            self.net = replace_selfattn_op_with_dense_temporal_causal_attn(self.net)
+            if hasattr(self, "net_ema") and self.net_ema is not None:
+                self.net_ema = replace_selfattn_op_with_dense_temporal_causal_attn(self.net_ema)
             return
 
         self.net = replace_selfattn_op_with_sparse_attn_op(

@@ -177,20 +177,18 @@ class DeviceMonitor(EveryN):
                     os.path.join(self.local_dir, f"summary_{iteration:09d}.csv"),
                     os.path.join(self.s3_save_fp, f"summary_{iteration:09d}.csv"),
                 )
-        if self.rank == 0:
-            log.info(f"{self.name} Stats:\n{summary_df.to_string()}")
-            if self.log_memory_detail:
-                memory_stats = torch.cuda.memory_stats()
-                if wandb.run:
-                    wandb_memory_info = {f"mem/{key}": memory_stats[key] for key in memory_stats.keys()}
-                    wandb.log(wandb_memory_info, step=iteration)
-                if self.save_s3:
-                    global_step = iteration // self.step_size
-                    should_run = global_step % self.upload_every_n == 0
-                    if should_run:
-                        easy_io.dump(
-                            memory_stats,
-                            os.path.join(self.s3_save_fp, f"memory_stats_{iteration:09d}.yaml"),
-                        )
+        if self.rank == 0 and self.log_memory_detail:
+            memory_stats = torch.cuda.memory_stats()
+            if wandb.run:
+                wandb_memory_info = {f"mem/{key}": memory_stats[key] for key in memory_stats.keys()}
+                wandb.log(wandb_memory_info, step=iteration)
+            if self.save_s3:
+                global_step = iteration // self.step_size
+                should_run = global_step % self.upload_every_n == 0
+                if should_run:
+                    easy_io.dump(
+                        memory_stats,
+                        os.path.join(self.s3_save_fp, f"memory_stats_{iteration:09d}.yaml"),
+                    )
 
         torch.cuda.reset_peak_memory_stats()

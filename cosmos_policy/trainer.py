@@ -172,7 +172,6 @@ class CosmosPolicyTrainer(ImaginaireTrainer):
                 epoch += 1
                 if _end_training:
                     break
-        log.success("Done with training.")
         if iteration % self.config.checkpoint.save_iter != 0:
             self.checkpointer.save(model, optimizer, scheduler, grad_scaler, iteration=iteration)
         self.callbacks.on_train_end(model, iteration=iteration)

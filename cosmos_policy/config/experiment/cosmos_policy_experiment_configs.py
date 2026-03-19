@@ -72,8 +72,8 @@ cosmos_predict2_2b_480p_libero = LazyDict(
                     "basic",
                     "long",
                     "cluster_speed",
-                    "wandb",
-                    "wandb_callback_actions",
+                    # "wandb",
+                    # "wandb_callback_actions",
                 ]
             },
             "_self_",

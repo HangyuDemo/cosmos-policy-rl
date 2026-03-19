@@ -289,6 +289,39 @@ def torch_attention_op(
         return rearrange(result_B_H_S_D, "b h s d -> b s h d")
 
 
+def build_temporal_causal_attn_mask(video_size: VideoSize, device: torch.device) -> torch.Tensor:
+    """Allow attention to all tokens from the same or earlier timesteps."""
+    spatial_size = video_size.H * video_size.W
+    seq_len = video_size.T * spatial_size
+    token_indices = torch.arange(seq_len, device=device, dtype=torch.long)
+    token_times = torch.div(token_indices, spatial_size, rounding_mode="floor")
+    # PyTorch SDPA expects bool masks where True means the position is visible.
+    return (token_times[:, None] >= token_times[None, :]).unsqueeze(0).unsqueeze(0)
+
+
+class DenseTorchAttentionOp(nn.Module):
+    """Module wrapper around torch_attention_op so it can replace module-backed attention ops."""
+
+    def forward(
+        self,
+        q_B_S_H_D: torch.Tensor,
+        k_B_S_H_D: torch.Tensor,
+        v_B_S_H_D: torch.Tensor,
+        attn_mask: Optional[torch.Tensor] = None,
+        flatten_heads: bool = True,
+    ) -> torch.Tensor:
+        return torch_attention_op(
+            q_B_S_H_D,
+            k_B_S_H_D,
+            v_B_S_H_D,
+            attn_mask=attn_mask,
+            flatten_heads=flatten_heads,
+        )
+
+    def set_context_parallel_group(self, *args, **kwargs) -> None:
+        return None
+
+
 def flex_attention_op(
     q_B_S_H_D: torch.Tensor,
     k_B_S_H_D: torch.Tensor,
@@ -462,6 +495,8 @@ class Attention(nn.Module):
 
         self.output_proj = nn.Linear(inner_dim, query_dim, bias=False)
         self.output_dropout = nn.Dropout(dropout) if dropout > 1e-4 else nn.Identity()
+        self.enable_temporal_causal_attn_mask = False
+        self._temporal_causal_attn_mask_cache = {}
 
         if self.backend == "transformer_engine":
             from transformer_engine.pytorch.attention import DotProductAttention
@@ -549,6 +584,13 @@ class Attention(nn.Module):
         kv_cache_cfg: Optional[KVCacheConfig] = None,
     ):
         additional_args = {}
+        if self.enable_temporal_causal_attn_mask:
+            if video_size is None:
+                raise ValueError("video_size must be provided when temporal causal attention is enabled.")
+            mask_key = (video_size.T, video_size.H, video_size.W, q.device)
+            if mask_key not in self._temporal_causal_attn_mask_cache:
+                self._temporal_causal_attn_mask_cache[mask_key] = build_temporal_causal_attn_mask(video_size, q.device)
+            additional_args["attn_mask"] = self._temporal_causal_attn_mask_cache[mask_key]
         if isinstance(self.attn_op, (NattenA2AAttnOp, NeighborhoodAttention)) or self.backend == "i4":
             additional_args["video_size"] = video_size
         if isinstance(self.attn_op, AttentionOpWithKVCache):
@@ -1945,5 +1987,16 @@ def replace_selfattn_op_with_sparse_attn_op(
                 )
 
             block.self_attn.register_module("attn_op", sparse_attn_op)
+
+    return model
+
+
+def replace_selfattn_op_with_dense_temporal_causal_attn(model: MiniTrainDIT) -> MiniTrainDIT:
+    """Keep dense self-attention but enforce a temporal causal mask over flattened T*H*W tokens."""
+    for block in model.blocks:
+        block.self_attn.attn_op = DenseTorchAttentionOp()
+        block.self_attn.backend = "torch"
+        block.self_attn.enable_temporal_causal_attn_mask = True
+        block.self_attn._temporal_causal_attn_mask_cache = {}
 
     return model
