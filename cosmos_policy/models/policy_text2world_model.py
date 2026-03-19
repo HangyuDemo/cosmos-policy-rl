@@ -29,8 +29,9 @@ from cosmos_policy._src.imaginaire.lazy_config import LazyCall as L
 from cosmos_policy._src.imaginaire.lazy_config import LazyDict
 from cosmos_policy._src.imaginaire.lazy_config import instantiate as lazy_instantiate
 from cosmos_policy._src.imaginaire.modules.res_sampler import COMMON_SOLVER_OPTIONS
-from cosmos_policy._src.imaginaire.utils import misc
+from cosmos_policy._src.imaginaire.utils import log, misc
 from cosmos_policy._src.imaginaire.utils.context_parallel import broadcast_split_tensor, cat_outputs_cp
+from cosmos_policy._src.predict2.modules.neighborhood_attn import ALLOWED_COMPUTE_CAPS
 from cosmos_policy._src.predict2.models.text2world_model import (
     DiffusionModel as BaseDiffusionModel,
 )
@@ -297,6 +298,24 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
 
     def _maybe_enable_hierarchical_time_causal_self_attention(self) -> None:
         if not self.config.enable_hierarchical_time_causal_self_attention:
+            return
+
+        if not torch.cuda.is_available():
+            log.warning(
+                "Skipping hierarchical time-causal self-attention replacement because CUDA is not available."
+            )
+            self.config.enable_hierarchical_time_causal_self_attention = False
+            return
+
+        major, minor = torch.cuda.get_device_capability(torch.cuda.current_device())
+        compute_capability = major * 10 + minor
+        if compute_capability not in ALLOWED_COMPUTE_CAPS:
+            log.warning(
+                "Skipping hierarchical time-causal self-attention replacement because the current GPU "
+                f"compute capability ({compute_capability}) is not supported by NATTEN. "
+                f"Supported capabilities: {ALLOWED_COMPUTE_CAPS}."
+            )
+            self.config.enable_hierarchical_time_causal_self_attention = False
             return
 
         self.net = replace_selfattn_op_with_sparse_attn_op(
