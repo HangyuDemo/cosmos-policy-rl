@@ -142,6 +142,10 @@ cosmos_predict2_2b_480p_libero = LazyDict(
                 high_sigma_strategy="none",
                 enable_hierarchical_time_causal_self_attention=True,
                 hierarchical_self_attention_n_dense_blocks=0,
+                freeze_tokenizer=True,
+                freeze_text_encoder=True,
+                freeze_backbone_first_n_blocks=20,
+                keep_norm_trainable_when_block_frozen=True,
             ),
         ),
         model_parallel=dict(

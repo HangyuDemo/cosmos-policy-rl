@@ -98,6 +98,33 @@ uv run --extra cu128 --group libero --python 3.10 \
 
 This command will train with effective batch size = (local batch size) * (# GPUs) * (gradient accumulation factor) = 30 * 8 * 8 = 1920, which matches the effective batch size we used for LIBERO in the Cosmos Policy paper. The command assumes access to 1 node of 8 80GB GPUs (e.g. H100s). The config above uses sharp learning rate decay after 30K steps. For faster iteration, our original experiment used 8 nodes (64 H100s total) with no gradient accumulation and trained for 40K gradient steps (~48 hours total). Note that using fewer nodes and trying to reproduce the full run will take significantly longer.
 
+### 当前项目中的冻结策略（中文说明）
+
+为了降低我们当前这版 LIBERO 训练的显存和计算开销，代码里已经默认打开了一套“冻结通用层、只训练高层任务相关部分”的策略。当前 `cosmos_predict2_2b_480p_libero` 配置会默认做下面几件事：
+
+* 冻结 `tokenizer`
+* 冻结 `text_encoder`
+* 冻结 backbone 前 `20` 个 transformer blocks
+* 保留被冻结 block 中的 `norm` 层继续训练
+* 保留 backbone 后 `8` 个 transformer blocks 继续训练
+
+这样做的考虑是：
+
+* 前面的视觉/文本通用表征部分更偏“基础感知”，通常可以直接复用 `Cosmos-Predict2`
+* 后面的高层 block 更靠近 `action / trajectory / future state / value` 这些和我们当前想法强相关的输出
+* `norm` 层保留可训练，通常能帮助模型在新任务上更平稳地适配
+
+如果训练启动成功，日志里会打印一条参数冻结摘要，大致会显示：
+
+* 总参数量
+* 当前被冻结了多少参数
+* 当前还剩多少可训练参数
+
+相关代码位置：
+
+* `cosmos_policy/models/policy_text2world_model.py`
+* `cosmos_policy/config/experiment/cosmos_policy_experiment_configs.py`
+
 You can modify various experiment config variables in `cosmos_policy/config/experiment/cosmos_policy_experiment_configs.py`. Alternatively, you can change variables on the command line. For example, appending `dataloader_train.batch_size=4` to the command above sets the local batch size (per GPU) to 4.
 
 In general, we recommend training until action L1 loss reaches around ~0.010. (We observed ~0.012 L1 loss after 40K gradient steps using 8 nodes (64 H100s) and no gradient accumulation -- i.e., same command as above except after removing `trainer.grad_accum_iter=8`.) Please be sure to test your policy with the same device/GPU used to train it! Otherwise, performance may drop substantially.

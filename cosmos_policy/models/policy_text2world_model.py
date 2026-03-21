@@ -268,6 +268,11 @@ class CosmosPolicyModelConfig(BaseText2WorldModelConfig):
             "is_causal": (True, False, False),
         }
     )
+    # Freezing strategy to reduce training cost while keeping the high-level policy adaptation trainable.
+    freeze_tokenizer: bool = False
+    freeze_text_encoder: bool = False
+    freeze_backbone_first_n_blocks: int = 0
+    keep_norm_trainable_when_block_frozen: bool = True
 
     def __attrs_post_init__(self):
         super().__attrs_post_init__()
@@ -298,6 +303,58 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
         self.sde = lazy_instantiate(config.sde)
         self.sampler = CosmosPolicySampler()
         self._maybe_enable_hierarchical_time_causal_self_attention()
+        self._apply_parameter_freezing()
+
+    def _freeze_module(self, module: Optional[torch.nn.Module], module_name: str) -> int:
+        if module is None:
+            return 0
+        if not hasattr(module, "parameters"):
+            log.info(f"Skipping freeze for {module_name}: object has no parameters() method")
+            return 0
+        num_params = 0
+        for param in module.parameters():
+            param.requires_grad = False
+            num_params += param.numel()
+        if num_params > 0:
+            log.info(f"Froze {module_name}: {num_params:,} params")
+        return num_params
+
+    def _apply_parameter_freezing(self) -> None:
+        frozen_params = 0
+
+        if self.config.freeze_tokenizer:
+            frozen_params += self._freeze_module(self.tokenizer, "tokenizer")
+
+        if self.config.freeze_text_encoder:
+            frozen_params += self._freeze_module(self.text_encoder, "text_encoder")
+
+        freeze_first_n = int(self.config.freeze_backbone_first_n_blocks)
+        blocks = getattr(self.net, "blocks", None)
+        if freeze_first_n > 0 and blocks is not None:
+            total_blocks = len(blocks)
+            freeze_first_n = min(freeze_first_n, total_blocks)
+            frozen_block_params = 0
+            for block_idx, block in enumerate(blocks):
+                if block_idx >= freeze_first_n:
+                    break
+                for name, param in block.named_parameters():
+                    if self.config.keep_norm_trainable_when_block_frozen and "norm" in name.lower():
+                        continue
+                    param.requires_grad = False
+                    frozen_block_params += param.numel()
+            frozen_params += frozen_block_params
+            log.info(
+                f"Froze backbone blocks [0:{freeze_first_n}) with "
+                f"{'norm layers left trainable' if self.config.keep_norm_trainable_when_block_frozen else 'all params frozen'}: "
+                f"{frozen_block_params:,} params"
+            )
+
+        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in self.parameters())
+        log.info(
+            "Parameter freezing summary: "
+            f"frozen={frozen_params:,}, trainable={trainable_params:,}, total={total_params:,}"
+        )
 
     def _maybe_enable_hierarchical_time_causal_self_attention(self) -> None:
         if not self.config.enable_hierarchical_time_causal_self_attention:
