@@ -2,6 +2,7 @@
 docker/
 data/
 Dockerfile
+cosmos-policy-cu128-libero.tar
 
 # 忽略测试文件
 test.py

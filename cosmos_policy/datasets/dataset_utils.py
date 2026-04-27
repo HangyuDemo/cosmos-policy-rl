@@ -286,7 +286,7 @@ def resize_images(images: np.ndarray, target_size: int) -> np.ndarray:
     return resized_images
 
 
-def apply_image_aug(images: torch.Tensor, stronger: bool = False) -> torch.Tensor:
+def apply_image_aug(images: torch.Tensor, stronger: bool = False, return_aug_params: bool = False):
     """
     Apply image augmentations to a batch of images represented as a torch.Tensor of shape (C, T, H, W).
 
@@ -296,6 +296,7 @@ def apply_image_aug(images: torch.Tensor, stronger: bool = False) -> torch.Tenso
 
     Returns:
         A torch.Tensor of the same shape and dtype with augmentations applied.
+        If return_aug_params is True, also returns the sampled geometric augmentation params.
     """
     # Get dimensions
     _, _, H, W = images.shape
@@ -373,6 +374,16 @@ def apply_image_aug(images: torch.Tensor, stronger: bool = False) -> torch.Tenso
     augmented_images = torch.stack(results)
     augmented_images = augmented_images.permute(1, 0, 2, 3)
 
+    aug_params = {
+        "crop_top": int(i),
+        "crop_left": int(j),
+        "crop_height": int(h),
+        "crop_width": int(w),
+        "rotation_angle_deg": float(angle),
+        "output_size": int(H),
+    }
+    if return_aug_params:
+        return augmented_images, aug_params
     return augmented_images
 
 
@@ -382,7 +393,8 @@ def preprocess_image(
     normalize_images: bool = False,
     use_image_aug: bool = True,
     stronger_image_aug: bool = False,
-) -> torch.Tensor:
+    return_aug_params: bool = False,
+):
     """
     Preprocesses images for training.
 
@@ -398,6 +410,7 @@ def preprocess_image(
 
     Returns:
         torch.Tensor: Preprocessed images
+        If return_aug_params is True, also returns the sampled geometric augmentation params.
     """
     assert isinstance(images, np.ndarray), f"Images are not of type `np.ndarray`! Got type: {type(images)}"
     assert images.dtype == np.uint8, f"Images do not have dtype `np.uint8`! Got dtype: {images.dtype}"
@@ -409,8 +422,12 @@ def preprocess_image(
 
     images = np.transpose(images, (3, 0, 1, 2))  # (T, H, W, C) -> (C, T, H, W)
     images = torch.from_numpy(images)
+    aug_params = None
     if use_image_aug:
-        images = apply_image_aug(images, stronger=stronger_image_aug)
+        if return_aug_params:
+            images, aug_params = apply_image_aug(images, stronger=stronger_image_aug, return_aug_params=True)
+        else:
+            images = apply_image_aug(images, stronger=stronger_image_aug)
     if normalize_images:
         # Normalize images and return as dtype torch.float32
         images = images.to(torch.float32)
@@ -420,4 +437,6 @@ def preprocess_image(
     else:
         # Keep images as dtype torch.uint8
         images = images.to(torch.uint8)
+    if return_aug_params:
+        return images, aug_params
     return images

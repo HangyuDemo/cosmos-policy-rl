@@ -23,6 +23,7 @@ import os
 import pickle
 import random
 from collections import defaultdict
+import math
 
 import h5py
 import imageio
@@ -125,6 +126,49 @@ def get_keypoint_trajectory_chunk_with_padding(
     projected = project_world_points(world_points, world_to_camera=world_to_camera, intrinsics=intrinsics)
     projected = sanitize_projected_points(projected, image_height=image_height, image_width=image_width)
     return normalize_2d_points(projected, image_height=image_height, image_width=image_width)
+
+
+def apply_image_aug_to_normalized_trajectory(
+    keypoint_trajectory: np.ndarray, final_image_size: int, aug_params: dict | None
+) -> np.ndarray:
+    """Apply the same crop/rotate geometry used on the image to normalized 2D trajectory points."""
+    if aug_params is None:
+        return keypoint_trajectory.astype(np.float32)
+
+    points = keypoint_trajectory.astype(np.float32).copy()
+    if points.ndim != 2 or points.shape[1] != 2:
+        raise ValueError(f"Expected trajectory shape (T, 2), got {points.shape}")
+
+    image_extent = max(float(final_image_size - 1), 1.0)
+    points[:, 0] *= image_extent
+    points[:, 1] *= image_extent
+
+    crop_top = float(aug_params["crop_top"])
+    crop_left = float(aug_params["crop_left"])
+    crop_height = max(float(aug_params["crop_height"]), 1.0)
+    crop_width = max(float(aug_params["crop_width"]), 1.0)
+
+    points[:, 0] = (points[:, 0] - crop_left) * image_extent / crop_width
+    points[:, 1] = (points[:, 1] - crop_top) * image_extent / crop_height
+
+    angle_deg = float(aug_params.get("rotation_angle_deg", 0.0))
+    if abs(angle_deg) > 1e-6:
+        theta = math.radians(angle_deg)
+        cos_theta = math.cos(theta)
+        sin_theta = math.sin(theta)
+        center = image_extent / 2.0
+        shifted_x = points[:, 0] - center
+        shifted_y = points[:, 1] - center
+        rotated_x = cos_theta * shifted_x + sin_theta * shifted_y
+        rotated_y = -sin_theta * shifted_x + cos_theta * shifted_y
+        points[:, 0] = rotated_x + center
+        points[:, 1] = rotated_y + center
+
+    points[:, 0] = np.clip(points[:, 0], 0.0, image_extent)
+    points[:, 1] = np.clip(points[:, 1], 0.0, image_extent)
+    points[:, 0] /= image_extent
+    points[:, 1] /= image_extent
+    return points.astype(np.float32)
 
 
 class LIBERODataset(Dataset):
@@ -780,12 +824,13 @@ class LIBERODataset(Dataset):
 
         # Stack images and preprocess
         images = np.concatenate(image_list, axis=0)
-        images = preprocess_image(
+        images, image_aug_params = preprocess_image(
             images,
             final_image_size=self.final_image_size,
             normalize_images=self.normalize_images,
             use_image_aug=self.use_image_aug,
             stronger_image_aug=self.use_stronger_image_aug,
+            return_aug_params=True,
         )
 
         # Calculate how many actions we can get from the current index
@@ -805,6 +850,11 @@ class LIBERODataset(Dataset):
                 intrinsics=episode_data["intrinsics"],
                 image_height=image_height,
                 image_width=image_width,
+            )
+            keypoint_trajectory = apply_image_aug_to_normalized_trajectory(
+                keypoint_trajectory,
+                final_image_size=self.final_image_size,
+                aug_params=image_aug_params,
             )
         else:
             keypoint_trajectory = np.zeros((self.chunk_size, 2), dtype=np.float32)
